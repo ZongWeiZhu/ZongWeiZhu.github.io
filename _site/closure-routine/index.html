@@ -14,21 +14,21 @@
     <meta property="og:type" content="profile">
 
     <!-- Begin Jekyll SEO tag v2.6.1 -->
-<title>GoLang 循环调用闭包、携程的问题 | Welly</title>
+<title>使用Done Channel或Context取消GoRoutine区别 | Welly</title>
 <meta name="generator" content="Jekyll v3.8.5" />
-<meta property="og:title" content="GoLang 循环调用闭包、携程的问题" />
+<meta property="og:title" content="使用Done Channel或Context取消GoRoutine区别" />
 <meta name="author" content="welly" />
 <meta property="og:locale" content="en_US" />
-<meta name="description" content="closure、routine" />
-<meta property="og:description" content="closure、routine" />
+<meta name="description" content="context、channel、routine" />
+<meta property="og:description" content="context、channel、routine" />
 <link rel="canonical" href="http://localhost:4000/closure-routine/" />
 <meta property="og:url" content="http://localhost:4000/closure-routine/" />
 <meta property="og:site_name" content="Welly" />
 <meta property="og:image" content="http://localhost:4000/assets/images/markdown.jpg" />
 <meta property="og:type" content="article" />
-<meta property="article:published_time" content="2019-12-22T22:44:00+08:00" />
+<meta property="article:published_time" content="2020-01-12T23:48:00+08:00" />
 <script type="application/ld+json">
-{"url":"http://localhost:4000/closure-routine/","headline":"GoLang 循环调用闭包、携程的问题","dateModified":"2019-12-22T22:44:00+08:00","datePublished":"2019-12-22T22:44:00+08:00","author":{"@type":"Person","name":"welly"},"description":"closure、routine","image":"http://localhost:4000/assets/images/markdown.jpg","mainEntityOfPage":{"@type":"WebPage","@id":"http://localhost:4000/closure-routine/"},"@type":"BlogPosting","@context":"https://schema.org"}</script>
+{"url":"http://localhost:4000/closure-routine/","headline":"使用Done Channel或Context取消GoRoutine区别","dateModified":"2020-01-12T23:48:00+08:00","datePublished":"2020-01-12T23:48:00+08:00","author":{"@type":"Person","name":"welly"},"description":"context、channel、routine","image":"http://localhost:4000/assets/images/markdown.jpg","mainEntityOfPage":{"@type":"WebPage","@id":"http://localhost:4000/closure-routine/"},"@type":"BlogPosting","@context":"https://schema.org"}</script>
 <!-- End Jekyll SEO tag -->
 
     
@@ -1447,15 +1447,15 @@ pre {
 
 
 
-<h1 class="title">GoLang 循环调用闭包、携程的问题</h1>
+<h1 class="title">使用Done Channel或Context取消GoRoutine区别</h1>
 
 <span class="date">
-    <time datetime="22-12-2019">Sunday. December 22, 2019</time>
+    <time datetime="12-01-2020">Sunday. January 12, 2020</time>
      - <span class="reading-time" title="Estimated read time">
     
 
     
-        3 mins
+        6 mins
     
 </span>
 
@@ -1471,148 +1471,212 @@ pre {
     </div>
 
 
-<h2 id="循环调用闭包">循环调用闭包</h2>
+<h2 id="abstract">Abstract</h2>
+<p>本文使用两个携程去执行greeting和farewell，并使用Done Channel和context的模式去取消携程，对比两种方式的不同以及各自的优势。</p>
 
-<p>GoLang的for循环，使用同一个迭代变量(地址相同)，当我们使用闭包时，如果使用的姿势不对会造成意想不到的结果，如下图这个例子，根本原因在于闭包延迟使用了这个迭代变量。</p>
+<h2 id="done-channel">Done Channel</h2>
+<p>Done Channel模式将初始化done channel变量并传给每个携程来设置标准的抢占方法。使用下面代码中1方式，那么程序将会正常结束；使用2方式，我们在两个携程结束之前关闭done channel，那么两个携程都将会被提前取消。</p>
 
-<div class="language-golang highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="k">func</span> <span class="n">main</span><span class="p">()</span> <span class="p">{</span>
-    <span class="k">var</span> <span class="n">dummyFuncs</span> <span class="p">[]</span><span class="k">func</span><span class="p">()</span>
-    <span class="k">for</span> <span class="n">i</span> <span class="o">:=</span> <span class="m">0</span><span class="p">;</span> <span class="n">i</span> <span class="o">&lt;</span> <span class="m">5</span><span class="p">;</span> <span class="n">i</span><span class="o">++</span> <span class="p">{</span>
-        <span class="n">dummyFuncs</span> <span class="o">=</span> <span class="nb">append</span><span class="p">(</span><span class="n">dummyFuncs</span><span class="p">,</span> <span class="k">func</span><span class="p">()</span> <span class="p">{</span>
-            <span class="n">fmt</span><span class="o">.</span><span class="n">Println</span><span class="p">(</span><span class="n">i</span><span class="p">)</span>
-        <span class="p">})</span>
-    <span class="p">}</span>
-    <span class="k">for</span> <span class="n">i</span> <span class="o">:=</span> <span class="m">0</span><span class="p">;</span> <span class="n">i</span> <span class="o">&lt;</span> <span class="m">5</span><span class="p">;</span> <span class="n">i</span><span class="o">++</span> <span class="p">{</span>
-        <span class="n">dummyFuncs</span><span class="p">[</span><span class="n">i</span><span class="p">]()</span>
-    <span class="p">}</span>
-<span class="p">}</span>
-</code></pre></div></div>
-<div class="language-text highlighter-rouge"><div class="highlight"><pre class="highlight"><code>运行结果：
-5
-5
-5
-5
-5
-</code></pre></div></div>
+<div class="language-golang highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="k">package</span> <span class="n">main</span>
 
-<h3 id="闭包的两种方法解决">闭包的两种方法解决</h3>
+<span class="k">import</span> <span class="p">(</span>
+    <span class="s">`fmt`</span>
+    <span class="s">`sync`</span>
+    <span class="s">`time`</span>
+<span class="p">)</span>
 
-<h4 id="1-使用新的局部变量">1 使用新的局部变量</h4>
-<div class="language-golang highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="k">func</span> <span class="n">main</span><span class="p">()</span> <span class="p">{</span>
-    <span class="k">var</span> <span class="n">dummyFuncs</span> <span class="p">[]</span><span class="k">func</span><span class="p">()</span>
-    <span class="k">for</span> <span class="n">i</span> <span class="o">:=</span> <span class="m">0</span><span class="p">;</span> <span class="n">i</span> <span class="o">&lt;</span> <span class="m">5</span><span class="p">;</span> <span class="n">i</span><span class="o">++</span> <span class="p">{</span>
-        <span class="n">tmp</span> <span class="o">:=</span> <span class="n">i</span>
-        <span class="n">dummyFuncs</span> <span class="o">=</span> <span class="nb">append</span><span class="p">(</span><span class="n">dummyFuncs</span><span class="p">,</span> <span class="k">func</span><span class="p">()</span> <span class="p">{</span>
-            <span class="n">fmt</span><span class="o">.</span><span class="n">Println</span><span class="p">(</span><span class="n">tmp</span><span class="p">)</span>
-        <span class="p">})</span>
-    <span class="p">}</span>
-    <span class="k">for</span> <span class="n">i</span> <span class="o">:=</span> <span class="m">0</span><span class="p">;</span> <span class="n">i</span> <span class="o">&lt;</span> <span class="m">5</span><span class="p">;</span> <span class="n">i</span><span class="o">++</span> <span class="p">{</span>
-        <span class="n">dummyFuncs</span><span class="p">[</span><span class="n">i</span><span class="p">]()</span>
-    <span class="p">}</span>
-<span class="p">}</span>
-</code></pre></div></div>
-<div class="language-text highlighter-rouge"><div class="highlight"><pre class="highlight"><code>运行结果：
-0
-1
-2
-3
-4
-</code></pre></div></div>
-<h4 id="2-使用新的函数将迭代变量作为参数传入">2 使用新的函数将迭代变量作为参数传入</h4>
-<div class="language-golang highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="k">func</span> <span class="n">main</span><span class="p">()</span> <span class="p">{</span>
-    <span class="k">var</span> <span class="n">dummyFuncs</span> <span class="p">[]</span><span class="k">func</span><span class="p">()</span>
-    <span class="k">for</span> <span class="n">i</span> <span class="o">:=</span> <span class="m">0</span><span class="p">;</span> <span class="n">i</span> <span class="o">&lt;</span> <span class="m">5</span><span class="p">;</span> <span class="n">i</span><span class="o">++</span> <span class="p">{</span>
-        <span class="k">func</span><span class="p">(</span><span class="n">j</span> <span class="kt">int</span><span class="p">){</span>
-            <span class="n">dummyFuncs</span> <span class="o">=</span> <span class="nb">append</span><span class="p">(</span><span class="n">dummyFuncs</span><span class="p">,</span> <span class="k">func</span><span class="p">()</span> <span class="p">{</span>
-                <span class="n">fmt</span><span class="o">.</span><span class="n">Println</span><span class="p">(</span><span class="n">j</span><span class="p">)</span>
-            <span class="p">})</span>
-        <span class="p">}(</span><span class="n">i</span><span class="p">)</span>
-    <span class="p">}</span>
-    <span class="k">for</span> <span class="n">i</span> <span class="o">:=</span> <span class="m">0</span><span class="p">;</span> <span class="n">i</span> <span class="o">&lt;</span> <span class="m">5</span><span class="p">;</span> <span class="n">i</span><span class="o">++</span> <span class="p">{</span>
-        <span class="n">dummyFuncs</span><span class="p">[</span><span class="n">i</span><span class="p">]()</span>
-    <span class="p">}</span>
-<span class="p">}</span>
-</code></pre></div></div>
-<div class="language-text highlighter-rouge"><div class="highlight"><pre class="highlight"><code>运行结果：
-0
-1
-2
-3
-4
-</code></pre></div></div>
+<span class="k">func</span> <span class="n">main</span><span class="p">()</span> <span class="p">{</span>
+    <span class="k">var</span> <span class="n">wg</span> <span class="n">sync</span><span class="o">.</span><span class="n">WaitGroup</span>
 
-<h2 id="循环调用携程">循环调用携程</h2>
-<p>当启动10000个携程时，期望获得从1-10000的输出，但是从输出文件中发现重复的数字非常多。因此，延迟使用循环里的迭代变量也会导致携程出现同样的问题。</p>
-<div class="language-golang highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="k">func</span> <span class="n">main</span><span class="p">(){</span>
-    <span class="n">wg</span> <span class="o">:=</span> <span class="n">sync</span><span class="o">.</span><span class="n">WaitGroup</span><span class="p">{}</span>
-    <span class="n">wg</span><span class="o">.</span><span class="n">Add</span><span class="p">(</span><span class="m">10000</span><span class="p">)</span>
-    <span class="k">for</span> <span class="n">i</span><span class="o">:=</span><span class="m">0</span> <span class="p">;</span> <span class="n">i</span><span class="o">&lt;</span><span class="m">10000</span> <span class="p">;</span> <span class="n">i</span><span class="o">++</span> <span class="p">{</span>
-        <span class="k">go</span> <span class="k">func</span><span class="p">()</span> <span class="p">{</span>
-            <span class="k">defer</span>  <span class="n">wg</span><span class="o">.</span><span class="n">Done</span><span class="p">()</span>
-            <span class="n">fmt</span><span class="o">.</span><span class="n">Println</span><span class="p">(</span><span class="n">i</span><span class="p">)</span>
-        <span class="p">}()</span>
-    <span class="p">}</span>
+    <span class="n">done</span> <span class="o">:=</span> <span class="nb">make</span><span class="p">(</span><span class="k">chan</span> <span class="k">interface</span><span class="p">{})</span>
+    <span class="k">defer</span> <span class="nb">close</span><span class="p">(</span><span class="n">done</span><span class="p">)</span> <span class="c">// 1</span>
+    <span class="n">wg</span><span class="o">.</span><span class="n">Add</span><span class="p">(</span><span class="m">1</span><span class="p">)</span>
+
+    <span class="k">go</span> <span class="k">func</span><span class="p">()</span> <span class="p">{</span>
+        <span class="k">defer</span> <span class="n">wg</span><span class="o">.</span><span class="n">Done</span><span class="p">()</span>
+        <span class="k">if</span> <span class="n">err</span> <span class="o">:=</span> <span class="n">printGreeting</span><span class="p">(</span><span class="n">done</span><span class="p">);</span> <span class="n">err</span> <span class="o">!=</span> <span class="no">nil</span> <span class="p">{</span>
+            <span class="n">fmt</span><span class="o">.</span><span class="n">Printf</span><span class="p">(</span><span class="s">"%v</span><span class="se">\n</span><span class="s">"</span><span class="p">,</span> <span class="n">err</span><span class="p">)</span>
+            <span class="k">return</span>
+        <span class="p">}</span>
+    <span class="p">}()</span>
+
+    <span class="n">wg</span><span class="o">.</span><span class="n">Add</span><span class="p">(</span><span class="m">1</span><span class="p">)</span>
+    <span class="k">go</span> <span class="k">func</span><span class="p">()</span> <span class="p">{</span>
+        <span class="k">defer</span> <span class="n">wg</span><span class="o">.</span><span class="n">Done</span><span class="p">()</span>
+        <span class="k">if</span> <span class="n">err</span> <span class="o">:=</span> <span class="n">printFarewell</span><span class="p">(</span><span class="n">done</span><span class="p">);</span> <span class="n">err</span> <span class="o">!=</span> <span class="no">nil</span> <span class="p">{</span>
+            <span class="n">fmt</span><span class="o">.</span><span class="n">Printf</span><span class="p">(</span><span class="s">"%v</span><span class="se">\n</span><span class="s">"</span><span class="p">,</span> <span class="n">err</span><span class="p">)</span>
+            <span class="k">return</span>
+        <span class="p">}</span>
+    <span class="p">}()</span>
+    <span class="c">//close(done) // 2</span>
     <span class="n">wg</span><span class="o">.</span><span class="n">Wait</span><span class="p">()</span>
+
 <span class="p">}</span>
-</code></pre></div></div>
-<div class="language-bash highlighter-rouge"><div class="highlight"><pre class="highlight"><code>go run share_mem.go <span class="o">&gt;</span> share_mem | <span class="nb">sort</span> <span class="nt">-u</span> <span class="o">&gt;</span> share_mem_2
-</code></pre></div></div>
-<div class="language-text highlighter-rouge"><div class="highlight"><pre class="highlight"><code>运行结果：
-990
-991
-992
-996
-997
-999
+
+<span class="k">func</span> <span class="n">printGreeting</span><span class="p">(</span><span class="n">done</span> <span class="o">&lt;-</span><span class="k">chan</span> <span class="k">interface</span><span class="p">{})</span> <span class="kt">error</span> <span class="p">{</span>
+    <span class="n">greeting</span><span class="p">,</span> <span class="n">err</span> <span class="o">:=</span> <span class="n">genGreeting</span><span class="p">(</span><span class="n">done</span><span class="p">)</span>
+    <span class="k">if</span> <span class="n">err</span> <span class="o">!=</span> <span class="no">nil</span> <span class="p">{</span>
+        <span class="k">return</span> <span class="n">err</span>
+    <span class="p">}</span>
+    <span class="n">fmt</span><span class="o">.</span><span class="n">Printf</span><span class="p">(</span><span class="s">"%s world!</span><span class="se">\n</span><span class="s">"</span><span class="p">,</span> <span class="n">greeting</span><span class="p">)</span>
+    <span class="k">return</span> <span class="no">nil</span>
+<span class="p">}</span>
+
+<span class="k">func</span> <span class="n">printFarewell</span><span class="p">(</span><span class="n">done</span> <span class="o">&lt;-</span><span class="k">chan</span> <span class="k">interface</span><span class="p">{})</span> <span class="kt">error</span> <span class="p">{</span>
+    <span class="n">farewell</span><span class="p">,</span> <span class="n">err</span> <span class="o">:=</span> <span class="n">genFarewell</span><span class="p">(</span><span class="n">done</span><span class="p">)</span>
+    <span class="k">if</span> <span class="n">err</span> <span class="o">!=</span> <span class="no">nil</span> <span class="p">{</span>
+        <span class="k">return</span> <span class="n">err</span>
+    <span class="p">}</span>
+    <span class="n">fmt</span><span class="o">.</span><span class="n">Printf</span><span class="p">(</span><span class="s">"%s world!</span><span class="se">\n</span><span class="s">"</span><span class="p">,</span> <span class="n">farewell</span><span class="p">)</span>
+    <span class="k">return</span> <span class="no">nil</span>
+<span class="p">}</span>
+
+
+<span class="k">func</span> <span class="n">genGreeting</span><span class="p">(</span><span class="n">done</span> <span class="o">&lt;-</span><span class="k">chan</span> <span class="k">interface</span><span class="p">{})</span> <span class="p">(</span><span class="kt">string</span><span class="p">,</span> <span class="kt">error</span><span class="p">)</span> <span class="p">{</span>
+    <span class="k">switch</span> <span class="n">l</span><span class="p">,</span> <span class="n">err</span> <span class="o">:=</span> <span class="n">locale</span><span class="p">(</span><span class="n">done</span><span class="p">);</span> <span class="p">{</span>
+    <span class="k">case</span> <span class="n">err</span> <span class="o">!=</span> <span class="no">nil</span><span class="o">:</span>
+        <span class="k">return</span> <span class="s">""</span><span class="p">,</span> <span class="n">err</span>
+    <span class="k">case</span> <span class="n">l</span> <span class="o">==</span> <span class="s">"awesome"</span><span class="o">:</span>
+        <span class="k">return</span> <span class="s">"hello"</span><span class="p">,</span> <span class="no">nil</span>
+
+    <span class="p">}</span>
+    <span class="k">return</span> <span class="s">""</span><span class="p">,</span> <span class="n">fmt</span><span class="o">.</span><span class="n">Errorf</span><span class="p">(</span><span class="s">"unsupported locale"</span><span class="p">)</span>
+<span class="p">}</span>
+
+<span class="k">func</span> <span class="n">genFarewell</span><span class="p">(</span><span class="n">done</span> <span class="o">&lt;-</span><span class="k">chan</span> <span class="k">interface</span><span class="p">{})</span> <span class="p">(</span><span class="kt">string</span><span class="p">,</span> <span class="kt">error</span><span class="p">)</span> <span class="p">{</span>
+    <span class="k">switch</span> <span class="n">l</span><span class="p">,</span> <span class="n">err</span> <span class="o">:=</span> <span class="n">locale</span><span class="p">(</span><span class="n">done</span><span class="p">);</span> <span class="p">{</span>
+    <span class="k">case</span> <span class="n">err</span> <span class="o">!=</span> <span class="no">nil</span><span class="o">:</span>
+        <span class="k">return</span> <span class="s">""</span><span class="p">,</span> <span class="n">err</span>
+    <span class="k">case</span> <span class="n">l</span> <span class="o">==</span> <span class="s">"awesome"</span><span class="o">:</span>
+        <span class="k">return</span> <span class="s">"goodbye"</span><span class="p">,</span> <span class="no">nil</span>
+
+    <span class="p">}</span>
+    <span class="k">return</span> <span class="s">""</span><span class="p">,</span> <span class="n">fmt</span><span class="o">.</span><span class="n">Errorf</span><span class="p">(</span><span class="s">"unsupported locale"</span><span class="p">)</span>
+<span class="p">}</span>
+
+<span class="k">func</span> <span class="n">locale</span><span class="p">(</span><span class="n">done</span> <span class="o">&lt;-</span><span class="k">chan</span> <span class="k">interface</span><span class="p">{})</span> <span class="p">(</span><span class="kt">string</span><span class="p">,</span> <span class="kt">error</span><span class="p">)</span> <span class="p">{</span>
+    <span class="k">select</span> <span class="p">{</span>
+    <span class="k">case</span> <span class="o">&lt;-</span><span class="n">done</span><span class="o">:</span>
+        <span class="k">return</span> <span class="s">""</span><span class="p">,</span> <span class="n">fmt</span><span class="o">.</span><span class="n">Errorf</span><span class="p">(</span><span class="s">"canceled"</span><span class="p">)</span>
+    <span class="k">case</span> <span class="o">&lt;-</span><span class="n">time</span><span class="o">.</span><span class="n">After</span><span class="p">(</span><span class="m">3</span> <span class="o">*</span> <span class="n">time</span><span class="o">.</span><span class="n">Second</span><span class="p">)</span><span class="o">:</span>
+    <span class="p">}</span>
+    <span class="k">return</span> <span class="s">"awesome"</span><span class="p">,</span> <span class="no">nil</span>
+<span class="p">}</span>
 </code></pre></div></div>
 
-<h3 id="携程的两种方法解决">携程的两种方法解决</h3>
+<div class="language-text highlighter-rouge"><div class="highlight"><pre class="highlight"><code>运行1代码结果
+goodbye world!
+hello world!
+</code></pre></div></div>
 
-<h4 id="1-使用新的局部变量-1">1 使用新的局部变量</h4>
-<div class="language-golang highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="k">func</span> <span class="n">main</span><span class="p">(){</span>
-    <span class="n">wg</span> <span class="o">:=</span> <span class="n">sync</span><span class="o">.</span><span class="n">WaitGroup</span><span class="p">{}</span>
-    <span class="n">wg</span><span class="o">.</span><span class="n">Add</span><span class="p">(</span><span class="m">10000</span><span class="p">)</span>
-    <span class="k">for</span> <span class="n">i</span><span class="o">:=</span><span class="m">0</span> <span class="p">;</span> <span class="n">i</span><span class="o">&lt;</span><span class="m">10000</span> <span class="p">;</span> <span class="n">i</span><span class="o">++</span> <span class="p">{</span>
-        <span class="n">j</span> <span class="o">:=</span> <span class="n">i</span>
-        <span class="k">go</span> <span class="k">func</span><span class="p">()</span> <span class="p">{</span>
-            <span class="k">defer</span>  <span class="n">wg</span><span class="o">.</span><span class="n">Done</span><span class="p">()</span>
-            <span class="n">fmt</span><span class="o">.</span><span class="n">Println</span><span class="p">(</span><span class="n">j</span><span class="p">)</span>
-        <span class="p">}()</span>
-    <span class="p">}</span>
+<div class="language-text highlighter-rouge"><div class="highlight"><pre class="highlight"><code>运行2代码结果
+canceled
+canceled
+</code></pre></div></div>
+
+<h2 id="context">Context</h2>
+<p>如果我们希望genGreeting在耗时过长的时候发生超时；亦或是知道genFarewell的父进程将要被取消，不希望Farewell调用locale。那么context包中WithCancel、WithDeadline、WithTimeOut可以帮我们做这些事情。</p>
+
+<div class="language-golang highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="k">package</span> <span class="n">main</span>
+
+<span class="k">import</span> <span class="p">(</span>
+    <span class="s">`context`</span>
+    <span class="s">`fmt`</span>
+    <span class="s">`sync`</span>
+    <span class="s">`time`</span>
+<span class="p">)</span>
+
+<span class="k">func</span> <span class="n">main</span><span class="p">()</span> <span class="p">{</span>
+    <span class="k">var</span> <span class="n">wg</span> <span class="n">sync</span><span class="o">.</span><span class="n">WaitGroup</span>
+
+    <span class="c">// 1 使用context包中的withCancel创建一个ctx</span>
+    <span class="n">ctx</span><span class="p">,</span> <span class="n">cancel</span> <span class="o">:=</span> <span class="n">context</span><span class="o">.</span><span class="n">WithCancel</span><span class="p">(</span><span class="n">context</span><span class="o">.</span><span class="n">Background</span><span class="p">())</span>
+    <span class="k">defer</span> <span class="n">cancel</span><span class="p">()</span>
+    <span class="n">wg</span><span class="o">.</span><span class="n">Add</span><span class="p">(</span><span class="m">1</span><span class="p">)</span>
+
+    <span class="k">go</span> <span class="k">func</span><span class="p">()</span> <span class="p">{</span>
+        <span class="k">defer</span> <span class="n">wg</span><span class="o">.</span><span class="n">Done</span><span class="p">()</span>
+        <span class="c">// 2 如果greeting发生错误那么ctx将会被取消</span>
+        <span class="k">if</span> <span class="n">err</span> <span class="o">:=</span> <span class="n">printGreetingCtx</span><span class="p">(</span><span class="n">ctx</span><span class="p">);</span> <span class="n">err</span> <span class="o">!=</span> <span class="no">nil</span> <span class="p">{</span>
+            <span class="n">fmt</span><span class="o">.</span><span class="n">Printf</span><span class="p">(</span><span class="s">"greeting: %v</span><span class="se">\n</span><span class="s">"</span><span class="p">,</span> <span class="n">err</span><span class="p">)</span>
+            <span class="n">cancel</span><span class="p">()</span>
+        <span class="p">}</span>
+    <span class="p">}()</span>
+
+    <span class="n">wg</span><span class="o">.</span><span class="n">Add</span><span class="p">(</span><span class="m">1</span><span class="p">)</span>
+    <span class="k">go</span> <span class="k">func</span><span class="p">()</span> <span class="p">{</span>
+        <span class="k">defer</span> <span class="n">wg</span><span class="o">.</span><span class="n">Done</span><span class="p">()</span>
+        <span class="k">if</span> <span class="n">err</span> <span class="o">:=</span> <span class="n">printFarewellCtx</span><span class="p">(</span><span class="n">ctx</span><span class="p">);</span> <span class="n">err</span> <span class="o">!=</span> <span class="no">nil</span> <span class="p">{</span>
+            <span class="n">fmt</span><span class="o">.</span><span class="n">Printf</span><span class="p">(</span><span class="s">"farewell: %v</span><span class="se">\n</span><span class="s">"</span><span class="p">,</span> <span class="n">err</span><span class="p">)</span>
+            <span class="n">cancel</span><span class="p">()</span>
+        <span class="p">}</span>
+    <span class="p">}()</span>
+
     <span class="n">wg</span><span class="o">.</span><span class="n">Wait</span><span class="p">()</span>
+
+<span class="p">}</span>
+
+<span class="k">func</span> <span class="n">printGreetingCtx</span><span class="p">(</span><span class="n">ctx</span> <span class="n">context</span><span class="o">.</span><span class="n">Context</span><span class="p">)</span> <span class="kt">error</span> <span class="p">{</span>
+    <span class="n">greeting</span><span class="p">,</span> <span class="n">err</span> <span class="o">:=</span> <span class="n">genGreetingCtx</span><span class="p">(</span><span class="n">ctx</span><span class="p">)</span>
+    <span class="k">if</span> <span class="n">err</span> <span class="o">!=</span> <span class="no">nil</span> <span class="p">{</span>
+        <span class="k">return</span> <span class="n">err</span>
+    <span class="p">}</span>
+    <span class="n">fmt</span><span class="o">.</span><span class="n">Printf</span><span class="p">(</span><span class="s">"%s world!</span><span class="se">\n</span><span class="s">"</span><span class="p">,</span> <span class="n">greeting</span><span class="p">)</span>
+    <span class="k">return</span> <span class="no">nil</span>
+<span class="p">}</span>
+
+<span class="k">func</span> <span class="n">printFarewellCtx</span><span class="p">(</span><span class="n">ctx</span> <span class="n">context</span><span class="o">.</span><span class="n">Context</span><span class="p">)</span> <span class="kt">error</span> <span class="p">{</span>
+    <span class="n">farewell</span><span class="p">,</span> <span class="n">err</span> <span class="o">:=</span> <span class="n">genFarewellCtx</span><span class="p">(</span><span class="n">ctx</span><span class="p">)</span>
+    <span class="k">if</span> <span class="n">err</span> <span class="o">!=</span> <span class="no">nil</span> <span class="p">{</span>
+        <span class="k">return</span> <span class="n">err</span>
+    <span class="p">}</span>
+    <span class="n">fmt</span><span class="o">.</span><span class="n">Printf</span><span class="p">(</span><span class="s">"%s world!</span><span class="se">\n</span><span class="s">"</span><span class="p">,</span> <span class="n">farewell</span><span class="p">)</span>
+    <span class="k">return</span> <span class="no">nil</span>
+<span class="p">}</span>
+
+
+<span class="k">func</span> <span class="n">genGreetingCtx</span><span class="p">(</span><span class="n">ctx</span> <span class="n">context</span><span class="o">.</span><span class="n">Context</span><span class="p">)</span> <span class="p">(</span><span class="kt">string</span><span class="p">,</span> <span class="kt">error</span><span class="p">)</span> <span class="p">{</span>
+    <span class="c">// 3 使用context包中withTime包装成新的ctx 如果该函数在1s中没执行完</span>
+    <span class="c">//   那么它的上游函数的任何子函数将会被取消</span>
+    <span class="n">ctx</span><span class="p">,</span><span class="n">cancel</span> <span class="o">:=</span> <span class="n">context</span><span class="o">.</span><span class="n">WithTimeout</span><span class="p">(</span><span class="n">ctx</span><span class="p">,</span> <span class="m">1</span><span class="o">*</span><span class="n">time</span><span class="o">.</span><span class="n">Second</span><span class="p">)</span>
+    <span class="k">defer</span> <span class="n">cancel</span><span class="p">()</span>
+    <span class="k">switch</span> <span class="n">l</span><span class="p">,</span> <span class="n">err</span> <span class="o">:=</span> <span class="n">localeCtx</span><span class="p">(</span><span class="n">ctx</span><span class="p">);</span> <span class="p">{</span>
+    <span class="k">case</span> <span class="n">err</span> <span class="o">!=</span> <span class="no">nil</span><span class="o">:</span>
+        <span class="k">return</span> <span class="s">""</span><span class="p">,</span> <span class="n">err</span>
+    <span class="k">case</span> <span class="n">l</span> <span class="o">==</span> <span class="s">"awesome"</span><span class="o">:</span>
+        <span class="k">return</span> <span class="s">"hello"</span><span class="p">,</span> <span class="no">nil</span>
+
+    <span class="p">}</span>
+    <span class="k">return</span> <span class="s">""</span><span class="p">,</span> <span class="n">fmt</span><span class="o">.</span><span class="n">Errorf</span><span class="p">(</span><span class="s">"unsupported locale"</span><span class="p">)</span>
+<span class="p">}</span>
+
+<span class="k">func</span> <span class="n">genFarewellCtx</span><span class="p">(</span><span class="n">ctx</span> <span class="n">context</span><span class="o">.</span><span class="n">Context</span><span class="p">)</span> <span class="p">(</span><span class="kt">string</span><span class="p">,</span> <span class="kt">error</span><span class="p">)</span> <span class="p">{</span>
+    <span class="k">switch</span> <span class="n">l</span><span class="p">,</span> <span class="n">err</span> <span class="o">:=</span> <span class="n">localeCtx</span><span class="p">(</span><span class="n">ctx</span><span class="p">);</span> <span class="p">{</span>
+    <span class="k">case</span> <span class="n">err</span> <span class="o">!=</span> <span class="no">nil</span><span class="o">:</span>
+        <span class="k">return</span> <span class="s">""</span><span class="p">,</span> <span class="n">err</span>
+    <span class="k">case</span> <span class="n">l</span> <span class="o">==</span> <span class="s">"awesome"</span><span class="o">:</span>
+        <span class="k">return</span> <span class="s">"goodbye"</span><span class="p">,</span> <span class="no">nil</span>
+
+    <span class="p">}</span>
+    <span class="k">return</span> <span class="s">""</span><span class="p">,</span> <span class="n">fmt</span><span class="o">.</span><span class="n">Errorf</span><span class="p">(</span><span class="s">"unsupported locale"</span><span class="p">)</span>
+<span class="p">}</span>
+
+<span class="k">func</span> <span class="n">localeCtx</span><span class="p">(</span><span class="n">ctx</span> <span class="n">context</span><span class="o">.</span><span class="n">Context</span><span class="p">)</span> <span class="p">(</span><span class="kt">string</span><span class="p">,</span> <span class="kt">error</span><span class="p">)</span> <span class="p">{</span>
+    <span class="k">select</span> <span class="p">{</span>
+    <span class="k">case</span> <span class="o">&lt;-</span><span class="n">ctx</span><span class="o">.</span><span class="n">Done</span><span class="p">()</span><span class="o">:</span>
+        <span class="c">// 4 返回ctx被取消的原因</span>
+        <span class="k">return</span> <span class="s">""</span><span class="p">,</span> <span class="n">ctx</span><span class="o">.</span><span class="n">Err</span><span class="p">()</span>
+    <span class="k">case</span> <span class="o">&lt;-</span><span class="n">time</span><span class="o">.</span><span class="n">After</span><span class="p">(</span><span class="m">3</span> <span class="o">*</span> <span class="n">time</span><span class="o">.</span><span class="n">Second</span><span class="p">)</span><span class="o">:</span>
+    <span class="p">}</span>
+    <span class="k">return</span> <span class="s">"awesome"</span><span class="p">,</span> <span class="no">nil</span>
 <span class="p">}</span>
 </code></pre></div></div>
-<div class="language-bash highlighter-rouge"><div class="highlight"><pre class="highlight"><code>go run share_mem.go <span class="o">&gt;</span> share_mem | <span class="nb">sort</span> <span class="nt">-u</span> <span class="o">&gt;</span> share_mem_2
+<div class="language-text highlighter-rouge"><div class="highlight"><pre class="highlight"><code>运行代码结果
+greeting: context deadline exceeded
+farewell: context canceled
 </code></pre></div></div>
-<div class="language-text highlighter-rouge"><div class="highlight"><pre class="highlight"><code>运行结果：
-9995
-9996
-9997
-9998
-9999
-</code></pre></div></div>
-<h4 id="2-使用新的函数将迭代变量作为参数传入-1">2 使用新的函数将迭代变量作为参数传入</h4>
-<div class="language-golang highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="k">func</span> <span class="n">main</span><span class="p">(){</span>
-    <span class="n">wg</span> <span class="o">:=</span> <span class="n">sync</span><span class="o">.</span><span class="n">WaitGroup</span><span class="p">{}</span>
-    <span class="n">wg</span><span class="o">.</span><span class="n">Add</span><span class="p">(</span><span class="m">10000</span><span class="p">)</span>
-    <span class="k">for</span> <span class="n">i</span><span class="o">:=</span><span class="m">0</span> <span class="p">;</span> <span class="n">i</span><span class="o">&lt;</span><span class="m">10000</span> <span class="p">;</span> <span class="n">i</span><span class="o">++</span> <span class="p">{</span>
-        <span class="k">go</span> <span class="k">func</span><span class="p">(</span><span class="n">j</span> <span class="kt">int</span><span class="p">)</span> <span class="p">{</span>
-            <span class="k">defer</span>  <span class="n">wg</span><span class="o">.</span><span class="n">Done</span><span class="p">()</span>
-            <span class="n">fmt</span><span class="o">.</span><span class="n">Println</span><span class="p">(</span><span class="n">j</span><span class="p">)</span>
-        <span class="p">}(</span><span class="n">i</span><span class="p">)</span>
-    <span class="p">}</span>
-    <span class="n">wg</span><span class="o">.</span><span class="n">Wait</span><span class="p">()</span>
-<span class="p">}</span>
-</code></pre></div></div>
-<div class="language-bash highlighter-rouge"><div class="highlight"><pre class="highlight"><code>go run share_mem.go <span class="o">&gt;</span> share_mem | <span class="nb">sort</span> <span class="nt">-u</span> <span class="o">&gt;</span> share_mem_2
-</code></pre></div></div>
-<div class="language-text highlighter-rouge"><div class="highlight"><pre class="highlight"><code>运行结果：
-9995
-9996
-9997
-9998
-9999
-</code></pre></div></div>
+<h2 id="conclusion">Conclusion</h2>
+<p>Done Channel模式使用抢占的方式让我们在父进程中取消所有的携程；而使用context可以提供了更多的功能让我们选择何时结束携程，而且我们可以从context错误返回中获取错误和超时的额外信息，这是Done Channel无法做到的。</p>
 
 
 
@@ -1644,6 +1708,35 @@ pre {
             
         
     
+        
+        
+            
+                
+                    
+                    <h4>Related Posts</h4>
+                    <ul>
+                    
+                    <li class="relatedPost">
+                        <a href="http://localhost:4000/routine-diff-done/">GoLang 循环调用闭包、携程的问题
+                        
+                        </a>
+                    </li>
+                    
+                    
+                
+            
+                
+            
+        
+            
+                
+            
+                
+            
+        
+    
+    
+        </ul>
     
 </div>
 
@@ -1662,7 +1755,7 @@ pre {
         <div class="share">
             <!-- Note: Only use three share links if your site width is set to large -->
             <!-- If site width is set to normal, you may choose any two share links -->
-            <a class="twitter" href="https://twitter.com/intent/tweet?text=http://localhost:4000/closure-routine/ - GoLang 循环调用闭包、携程的问题 by @">
+            <a class="twitter" href="https://twitter.com/intent/tweet?text=http://localhost:4000/closure-routine/ - 使用Done Channel或Context取消GoRoutine区别 by @">
                 <svg class="icon icon-twitter"><use xlink:href="#icon-twitter"></use></svg><span class="icon-twitter">Tweet</span>
             </a>
 
@@ -1674,11 +1767,11 @@ pre {
                 <svg class="icon icon-google-plus"><use xlink:href="#icon-google-plus"></use></svg><span class="icon-google-plus">Share</span>
             </a> -->
 
-            <!-- <a class="linkedin" href="https://www.linkedin.com/shareArticle?mini=true&amp;url=http://localhost:4000/closure-routine/&amp;title=GoLang 循环调用闭包、携程的问题&amp;summary=closure、routine&amp;source=http://localhost:4000" target="_blank">
+            <!-- <a class="linkedin" href="https://www.linkedin.com/shareArticle?mini=true&amp;url=http://localhost:4000/closure-routine/&amp;title=使用Done Channel或Context取消GoRoutine区别&amp;summary=context、channel、routine&amp;source=http://localhost:4000" target="_blank">
                 <svg class="icon icon-linkedin"><use xlink:href="#icon-linkedin"></use></svg><span class="icon-linkedin">Share</span>
             </a> -->
 
-            <!-- <a class="reddit" href="https://reddit.com/submit?url=http://localhost:4000/closure-routine/&amp;title=GoLang 循环调用闭包、携程的问题" target="_blank">
+            <!-- <a class="reddit" href="https://reddit.com/submit?url=http://localhost:4000/closure-routine/&amp;title=使用Done Channel或Context取消GoRoutine区别" target="_blank">
                 <svg class="icon icon-reddit"><use xlink:href="#icon-reddit"></use></svg><span class="icon-reddit">Share</span>
             </a> -->
         </div>
@@ -1712,7 +1805,7 @@ pre {
 
 
 <footer class="footer-main">
-    Welly © 2019 <a class="link" href="http://localhost:4000/feed.xml" target="_blank"><svg class="icon icon-rss"><use xlink:href="#icon-rss"></use></svg></a>
+    Welly © 2020 <a class="link" href="http://localhost:4000/feed.xml" target="_blank"><svg class="icon icon-rss"><use xlink:href="#icon-rss"></use></svg></a>
 
     <p class="extra">
         <a class="link" href="https://github.com/sergiokopplin/indigo">Indigo theme</a> by <a class="link" href="https://github.com/sergiokopplin/indigo">Kopplin</a>

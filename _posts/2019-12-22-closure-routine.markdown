@@ -1,7 +1,7 @@
 ---
-title: "GoLang 循环调用闭包、携程的问题"
+title: "使用Done Channel或Context取消GoRoutine区别"
 layout: post
-date: 2019-12-22 22:44
+date: 2020-01-12 23:48
 image: /assets/images/markdown.jpg
 headerImage: false
 tag:
@@ -10,166 +10,249 @@ tag:
 star: true
 category: blog
 author: welly
-description: closure、routine
+description: context、channel、routine
 ---
 
-## 循环调用闭包
+## Abstract
+本文使用两个携程去执行greeting和farewell，并使用Done Channel和context的模式去取消携程，对比两种方式的不同以及各自的优势。
 
-GoLang的for循环，使用同一个迭代变量(地址相同)，当我们使用闭包时，如果使用的姿势不对会造成意想不到的结果，如下图这个例子，根本原因在于闭包延迟使用了这个迭代变量。
+## Done Channel
+Done Channel模式将初始化done channel变量并传给每个携程来设置标准的抢占方法。使用下面代码中1方式，那么程序将会正常结束；使用2方式，我们在两个携程结束之前关闭done channel，那么两个携程都将会被提前取消。
 
-``` golang
+```golang
+package main
+
+import (
+    `fmt`
+    `sync`
+    `time`
+)
+
 func main() {
-    var dummyFuncs []func()
-    for i := 0; i < 5; i++ {
-        dummyFuncs = append(dummyFuncs, func() {
-            fmt.Println(i)
-        })
+    var wg sync.WaitGroup
+
+    done := make(chan interface{})
+    defer close(done) // 1
+    wg.Add(1)
+
+    go func() {
+        defer wg.Done()
+        if err := printGreeting(done); err != nil {
+            fmt.Printf("%v\n", err)
+            return
+        }
+    }()
+
+    wg.Add(1)
+    go func() {
+        defer wg.Done()
+        if err := printFarewell(done); err != nil {
+            fmt.Printf("%v\n", err)
+            return
+        }
+    }()
+    //close(done) // 2
+    wg.Wait()
+
+}
+
+func printGreeting(done <-chan interface{}) error {
+    greeting, err := genGreeting(done)
+    if err != nil {
+        return err
     }
-    for i := 0; i < 5; i++ {
-        dummyFuncs[i]()
+    fmt.Printf("%s world!\n", greeting)
+    return nil
+}
+
+func printFarewell(done <-chan interface{}) error {
+    farewell, err := genFarewell(done)
+    if err != nil {
+        return err
     }
+    fmt.Printf("%s world!\n", farewell)
+    return nil
+}
+
+
+func genGreeting(done <-chan interface{}) (string, error) {
+    switch l, err := locale(done); {
+    case err != nil:
+        return "", err
+    case l == "awesome":
+        return "hello", nil
+
+    }
+    return "", fmt.Errorf("unsupported locale")
+}
+
+func genFarewell(done <-chan interface{}) (string, error) {
+    switch l, err := locale(done); {
+    case err != nil:
+        return "", err
+    case l == "awesome":
+        return "goodbye", nil
+
+    }
+    return "", fmt.Errorf("unsupported locale")
+}
+
+func locale(done <-chan interface{}) (string, error) {
+    select {
+    case <-done:
+        return "", fmt.Errorf("canceled")
+    case <-time.After(3 * time.Second):
+    }
+    return "awesome", nil
 }
 ```
+
 ``` text
-运行结果：
-5
-5
-5
-5
-5
+运行1代码结果
+goodbye world!
+hello world!
 ```
 
-### 闭包的两种方法解决
+``` text
+运行2代码结果
+canceled
+canceled
+```
 
-#### 1 使用新的局部变量
-``` golang
+## Context
+如果我们希望genGreeting在耗时过长的时候发生超时；亦或是知道genFarewell的父进程将要被取消，不希望Farewell调用locale。那么context包中WithCancel、WithDeadline、WithTimeOut可以帮我们做这些事情。
+
+```golang
+package main
+
+import (
+    `context`
+    `fmt`
+    `sync`
+    `time`
+)
+
 func main() {
-    var dummyFuncs []func()
-    for i := 0; i < 5; i++ {
-        tmp := i
-        dummyFuncs = append(dummyFuncs, func() {
-            fmt.Println(tmp)
-        })
-    }
-    for i := 0; i < 5; i++ {
-        dummyFuncs[i]()
-    }
-}
-```
-``` text
-运行结果：
-0
-1
-2
-3
-4
-```
-#### 2 使用新的函数将迭代变量作为参数传入
-``` golang
-func main() {
-    var dummyFuncs []func()
-    for i := 0; i < 5; i++ {
-        func(j int){
-            dummyFuncs = append(dummyFuncs, func() {
-                fmt.Println(j)
-            })
-        }(i)
-    }
-    for i := 0; i < 5; i++ {
-        dummyFuncs[i]()
-    }
-}
-```
-``` text
-运行结果：
-0
-1
-2
-3
-4
-```
+    var wg sync.WaitGroup
 
-## 循环调用携程
-当启动10000个携程时，期望获得从1-10000的输出，但是从输出文件中发现重复的数字非常多。因此，延迟使用循环里的迭代变量也会导致携程出现同样的问题。
-``` golang
-func main(){
-    wg := sync.WaitGroup{}
-    wg.Add(10000)
-    for i:=0 ; i<10000 ; i++ {
-        go func() {
-            defer  wg.Done()
-            fmt.Println(i)
-        }()
-    }
-    wg.Wait()
-}
-```
-``` bash
-go run share_mem.go > share_mem | sort -u > share_mem_2
-```
-``` text
-运行结果：
-990
-991
-992
-996
-997
-999
-```
+    // 1 使用context包中的withCancel创建一个ctx
+    ctx, cancel := context.WithCancel(context.Background())
+    defer cancel()
+    wg.Add(1)
 
-### 携程的两种方法解决
+    go func() {
+        defer wg.Done()
+        // 2 如果greeting发生错误那么ctx将会被取消
+        if err := printGreetingCtx(ctx); err != nil {
+            fmt.Printf("greeting: %v\n", err)
+            cancel()
+        }
+    }()
 
-#### 1 使用新的局部变量
-``` golang
-func main(){
-    wg := sync.WaitGroup{}
-    wg.Add(10000)
-    for i:=0 ; i<10000 ; i++ {
-        j := i
-        go func() {
-            defer  wg.Done()
-            fmt.Println(j)
-        }()
-    }
+    wg.Add(1)
+    go func() {
+        defer wg.Done()
+        if err := printFarewellCtx(ctx); err != nil {
+            fmt.Printf("farewell: %v\n", err)
+            cancel()
+        }
+    }()
+
     wg.Wait()
+
+}
+
+func printGreetingCtx(ctx context.Context) error {
+    greeting, err := genGreetingCtx(ctx)
+    if err != nil {
+        return err
+    }
+    fmt.Printf("%s world!\n", greeting)
+    return nil
+}
+
+func printFarewellCtx(ctx context.Context) error {
+    farewell, err := genFarewellCtx(ctx)
+    if err != nil {
+        return err
+    }
+    fmt.Printf("%s world!\n", farewell)
+    return nil
+}
+
+
+func genGreetingCtx(ctx context.Context) (string, error) {
+    // 3 使用context包中withTime包装成新的ctx 如果该函数在1s中没执行完
+    //   那么它的上游函数的任何子函数将会被取消
+    ctx,cancel := context.WithTimeout(ctx, 1*time.Second)
+    defer cancel()
+    switch l, err := localeCtx(ctx); {
+    case err != nil:
+        return "", err
+    case l == "awesome":
+        return "hello", nil
+
+    }
+    return "", fmt.Errorf("unsupported locale")
+}
+
+func genFarewellCtx(ctx context.Context) (string, error) {
+    switch l, err := localeCtx(ctx); {
+    case err != nil:
+        return "", err
+    case l == "awesome":
+        return "goodbye", nil
+
+    }
+    return "", fmt.Errorf("unsupported locale")
+}
+
+func localeCtx(ctx context.Context) (string, error) {
+    select {
+    case <-ctx.Done():
+        // 4 返回ctx被取消的原因
+        return "", ctx.Err()
+    case <-time.After(3 * time.Second):
+    }
+    return "awesome", nil
 }
 ```
-``` bash
-go run share_mem.go > share_mem | sort -u > share_mem_2
+```text
+运行代码结果
+greeting: context deadline exceeded
+farewell: context canceled
 ```
-``` text
-运行结果：
-9995
-9996
-9997
-9998
-9999
-```
-#### 2 使用新的函数将迭代变量作为参数传入
-``` golang
-func main(){
-    wg := sync.WaitGroup{}
-    wg.Add(10000)
-    for i:=0 ; i<10000 ; i++ {
-        go func(j int) {
-            defer  wg.Done()
-            fmt.Println(j)
-        }(i)
-    }
-    wg.Wait()
-}
-```
-``` bash
-go run share_mem.go > share_mem | sort -u > share_mem_2
-```
-``` text
-运行结果：
-9995
-9996
-9997
-9998
-9999
-```
+## Conclusion
+Done Channel模式使用抢占的方式让我们在父进程中取消所有的携程；而使用context可以提供了更多的功能让我们选择何时结束携程，而且我们可以从context错误返回中获取错误和超时的额外信息，这是Done Channel无法做到的。
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
